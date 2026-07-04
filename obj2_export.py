@@ -31,10 +31,10 @@
 bl_info = {
     "name": "OBJ 2.0 — Wavefront export with vertex colors",
     "author": "myuu-151",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (4, 0, 0),
     "location": "File > Export > OBJ 2.0 (.obj)",
-    "description": "Export Wavefront .obj with per-vertex colors (v x y z r g b) and the scene light rig (#light/#sun/#ambient).",
+    "description": "Export Wavefront .obj with per-vertex colors (v x y z r g b), the scene light rig (#light/#sun/#ambient), and lightmap UVs (vt u v u2 v2 + #lightmap).",
     "category": "Import-Export",
 }
 
@@ -126,6 +126,11 @@ class ExportOBJ2(bpy.types.Operator, ExportHelper):
         name="Include Lights", default=True,
         description="Write point/sun lights and world ambient as #light/#sun/#ambient "
                     "comment lines (read by the Affinity engine, ignored by other importers)")
+    lightmap: StringProperty(
+        name="Lightmap PNG", default="",
+        description="Write a '#lightmap <file>' line. Meshes with a second UV layer "
+                    "(one named 'Lightmap' preferred) also write 4-component vt lines "
+                    "(u v u2 v2) so engines can multiply the lightmap through UV2")
     color_scale: EnumProperty(
         name="Color Range",
         items=[('UNIT', "0..1 floats", "MeshLab / Blender convention (recommended)"),
@@ -180,6 +185,8 @@ def _write_obj2(op, context):
                               @ (o.matrix_world.to_3x3() @ Vector((0.0, 0.0, -1.0)))).normalized()
                         f.write("#sun %.4f %.4f %.4f %.4f %.4f %.4f %.3f\n"
                                 % (dv.x, dv.y, dv.z, c[0], c[1], c[2], d.energy))
+        if op.lightmap:
+            f.write("#lightmap %s\n" % op.lightmap)
 
         v_off = vt_off = vn_off = 0
         for obj in mesh_objs:
@@ -221,22 +228,42 @@ def _write_obj2(op, context):
                         f.write("v %.6f %.6f %.6f\n" % (co.x, co.y, co.z))
 
                 # --- UVs (per loop, deduplicated) ---
-                uv_layer = me.uv_layers.active.data if (op.write_uvs and me.uv_layers.active) else None
+                # Layer 0 = base texture UV. A second layer (one named
+                # 'Lightmap' preferred) rides the SAME vt line as two extra
+                # columns: vt u v u2 v2 — still valid OBJ, and the face
+                # indices stay v/vt/vn. Dedup keys include both pairs so
+                # corners differing only in lightmap UV don't merge.
+                uvls = me.uv_layers
+                uv_layer = uvls[0].data if (op.write_uvs and len(uvls) > 0) else None
+                lm_layer = None
+                if op.write_uvs and len(uvls) > 1:
+                    lm_layer = uvls.get('Lightmap') or uvls[1]
+                    if lm_layer == uvls[0]:
+                        lm_layer = uvls[1]
+                lm_uv = lm_layer.data if lm_layer else None
                 loop_uv = [0] * len(me.loops)
                 uv_list = []
                 if uv_layer:
                     uv_index = {}
                     for li in range(len(me.loops)):
                         uv = uv_layer[li].uv
-                        key = (round(uv.x, 6), round(uv.y, 6))
+                        if lm_uv:
+                            uv2 = lm_uv[li].uv
+                            key = (round(uv.x, 6), round(uv.y, 6),
+                                   round(uv2.x, 6), round(uv2.y, 6))
+                        else:
+                            key = (round(uv.x, 6), round(uv.y, 6))
                         idx = uv_index.get(key)
                         if idx is None:
                             idx = len(uv_list)
                             uv_index[key] = idx
                             uv_list.append(key)
                         loop_uv[li] = idx
-                    for u, w in uv_list:
-                        f.write("vt %.6f %.6f\n" % (u, w))
+                    for k in uv_list:
+                        if len(k) == 4:
+                            f.write("vt %.6f %.6f %.6f %.6f\n" % k)
+                        else:
+                            f.write("vt %.6f %.6f\n" % k)
 
                 # --- Normals (per loop, deduplicated) ---
                 loop_nrm = [0] * len(me.loops)

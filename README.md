@@ -82,6 +82,24 @@ f 1/1/1 2/2/1 3/3/1
 | `#ambient r g b` | world background color × strength | written once |
 | `#light x y z r g b energy radius` | position, color, watts, cutoff | point light; `radius` is Blender's *Custom Distance* (0 = none) |
 | `#sun dx dy dz r g b strength` | travel direction, color, W/m² | direction is where the light *goes* (Blender lights aim −Z) |
+| `#lightmap file.png` | lightmap image filename | written when the *Lightmap PNG* export option is set |
+
+### Lightmaps (1.2)
+
+Set the **Lightmap PNG** export option to the baked image's filename. Meshes
+with a **second UV layer** (one named `Lightmap` preferred) then write
+4-component texture coordinates — the lightmap UV rides the same `vt` line:
+
+```
+#lightmap arena_lightmap.png
+vt 0.375000 0.125000 0.191118 0.576039
+        (base UV)      (lightmap UV)
+```
+
+Faces still index `v/vt/vn`, so the file stays ordinary OBJ; importers that
+read only two floats per `vt` get the base UVs as usual. A consuming engine
+multiplies the lightmap over the base texture through the second UV set
+(e.g. a second pass with `glBlendFunc(GL_DST_COLOR, GL_ZERO)`).
 
 Positions and directions go through the same **Forward / Up** axis conversion
 as the geometry. Only `POINT` and `SUN` lamps are exported; with *Selection
