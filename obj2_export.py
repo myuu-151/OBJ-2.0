@@ -11,6 +11,17 @@
 # the extra columns still read the geometry, while importers that do (e.g.
 # the Affinity engine) pick up the colors.
 #
+# It can also carry the scene's LIGHTING RIG as comment lines (still 100%
+# valid OBJ — every other importer skips them):
+#
+#     #ambient r g b                       (world color * strength)
+#     #light   x y z  r g b  energy radius (point light; radius = custom
+#                                           distance cutoff, 0 = none)
+#     #sun     dx dy dz  r g b  strength   (sun; direction the light travels)
+#
+# Positions/directions go through the same Forward/Up axis conversion as the
+# geometry, so a consuming engine can light the model exactly as authored.
+#
 # Install: Blender > Edit > Preferences > Add-ons > Install… > pick this file >
 # enable "OBJ 2.0 — Wavefront export with vertex colors".
 # Use:     File > Export > OBJ 2.0 — Wavefront + Vertex Colors (.obj)
@@ -20,16 +31,17 @@
 bl_info = {
     "name": "OBJ 2.0 — Wavefront export with vertex colors",
     "author": "myuu-151",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (4, 0, 0),
     "location": "File > Export > OBJ 2.0 (.obj)",
-    "description": "Export Wavefront .obj with per-vertex colors appended to v lines (v x y z r g b).",
+    "description": "Export Wavefront .obj with per-vertex colors (v x y z r g b) and the scene light rig (#light/#sun/#ambient).",
     "category": "Import-Export",
 }
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy_extras.io_utils import ExportHelper, axis_conversion
+from mathutils import Vector
 
 
 def _loop_normal_getter(me):
@@ -77,6 +89,21 @@ def _vertex_color_getter(me):
     return get
 
 
+def _world_ambient(scene):
+    """World background color * strength -> flat ambient term, in 0..n."""
+    w = scene.world
+    if not w:
+        return (0.05, 0.05, 0.05)
+    if w.use_nodes and w.node_tree:
+        for n in w.node_tree.nodes:
+            if n.type == 'BACKGROUND':
+                c = n.inputs['Color'].default_value
+                s = n.inputs['Strength'].default_value
+                return (c[0] * s, c[1] * s, c[2] * s)
+    c = w.color
+    return (c[0], c[1], c[2])
+
+
 class ExportOBJ2(bpy.types.Operator, ExportHelper):
     """Export Wavefront .obj with per-vertex colors (v x y z r g b)"""
     bl_idname = "export_scene.obj2"
@@ -95,6 +122,10 @@ class ExportOBJ2(bpy.types.Operator, ExportHelper):
         description="Triangulate n-gons / quads on export")
     write_uvs: BoolProperty(name="Include UVs", default=True)
     write_normals: BoolProperty(name="Include Normals", default=True)
+    write_lights: BoolProperty(
+        name="Include Lights", default=True,
+        description="Write point/sun lights and world ambient as #light/#sun/#ambient "
+                    "comment lines (read by the Affinity engine, ignored by other importers)")
     color_scale: EnumProperty(
         name="Color Range",
         items=[('UNIT', "0..1 floats", "MeshLab / Blender convention (recommended)"),
@@ -127,6 +158,28 @@ def _write_obj2(op, context):
     with open(op.filepath, 'w', encoding='utf-8') as f:
         f.write("# OBJ 2.0 — Wavefront OBJ with per-vertex colors\n")
         f.write("# vertex lines carry color: v x y z r g b\n")
+
+        # --- Lighting rig (comment lines: valid OBJ for every importer) ---
+        if op.write_lights:
+            lamps = [o for o in source
+                     if o.type == 'LIGHT' and o.data.type in {'POINT', 'SUN'}]
+            if lamps:
+                amb = _world_ambient(context.scene)
+                f.write("# lighting rig: #ambient r g b | #light x y z r g b energy radius | #sun dx dy dz r g b strength\n")
+                f.write("#ambient %.4f %.4f %.4f\n" % (amb[0], amb[1], amb[2]))
+                for o in lamps:
+                    d = o.data
+                    c = d.color
+                    if d.type == 'POINT':
+                        loc = global_matrix @ o.matrix_world.translation
+                        radius = d.cutoff_distance if d.use_custom_distance else 0.0
+                        f.write("#light %.4f %.4f %.4f %.4f %.4f %.4f %.2f %.2f\n"
+                                % (loc.x, loc.y, loc.z, c[0], c[1], c[2], d.energy, radius))
+                    else:  # SUN — Blender lights aim down their local -Z
+                        dv = (global_matrix.to_3x3()
+                              @ (o.matrix_world.to_3x3() @ Vector((0.0, 0.0, -1.0)))).normalized()
+                        f.write("#sun %.4f %.4f %.4f %.4f %.4f %.4f %.3f\n"
+                                % (dv.x, dv.y, dv.z, c[0], c[1], c[2], d.energy))
 
         v_off = vt_off = vn_off = 0
         for obj in mesh_objs:
