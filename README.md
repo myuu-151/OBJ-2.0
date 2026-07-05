@@ -31,14 +31,16 @@ the same Forward/Up axis conversion as the geometry:
 #sun     dx dy dz  r g b  strength    (direction the light travels)
 ```
 
-## UV layers (lightmaps)
+## UV layers (lightmaps & AO maps)
 
-A mesh with a second UV layer (name it `Lightmap`) writes both channels on the
-same `vt` line, and the **Lightmap PNG** export option records the image:
+Extra UV layers ride the same `vt` line as extra pairs — pair 2 = lightmap
+(layer named `Lightmap`), pair 3 = grayscale AO (layer named `AO`). The
+**Lightmap PNG** / **AO Map PNG** export options record the images:
 
 ```
 #lightmap arena_lightmap.png
-vt u v u2 v2
+#aomap arena_ao.png
+vt u v  u2 v2  u3 v3
 ```
 
 Faces still index plain `v/vt/vn` — two-float readers get the base UVs.
@@ -52,13 +54,15 @@ Faces still index plain `v/vt/vn` — two-float readers get the base UVs.
 | Triangulate | off |
 | Include UVs / Normals / Lights | on |
 | Lightmap PNG | (blank = no `#lightmap` line) |
+| AO Map PNG | (blank = no `#aomap` line) |
 | Color Range | 0..1 floats |
 | Forward / Up | −Z / Y |
 
 ## Parsing it
 
-Count the floats: `v` has 3 or 6 (position + RGB), `vt` has 2 or 4 (base UV +
-lightmap UV). The `#` lines are ordinary comments to every other tool.
+Count the floats: `v` has 3 or 6 (position + RGB), `vt` has 2, 4, or 6 (base
+UV + lightmap UV + AO UV). The `#` lines are ordinary comments to every other
+tool.
 Reference consumer: [Affinity](https://github.com/myuu-151/Affinity).
 
 MIT.

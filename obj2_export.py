@@ -31,10 +31,10 @@
 bl_info = {
     "name": "OBJ 2.0 — Wavefront export with vertex colors",
     "author": "myuu-151",
-    "version": (1, 2, 0),
+    "version": (1, 3, 0),
     "blender": (4, 0, 0),
     "location": "File > Export > OBJ 2.0 (.obj)",
-    "description": "Export Wavefront .obj with per-vertex colors (v x y z r g b), the scene light rig (#light/#sun/#ambient), and lightmap UVs (vt u v u2 v2 + #lightmap).",
+    "description": "Export Wavefront .obj with per-vertex colors, the scene light rig (#light/#sun/#ambient), lightmap UVs (#lightmap + vt u v u2 v2), and AO-map UVs (#aomap + a third vt pair).",
     "category": "Import-Export",
 }
 
@@ -131,6 +131,11 @@ class ExportOBJ2(bpy.types.Operator, ExportHelper):
         description="Write a '#lightmap <file>' line. Meshes with a second UV layer "
                     "(one named 'Lightmap' preferred) also write 4-component vt lines "
                     "(u v u2 v2) so engines can multiply the lightmap through UV2")
+    aomap: StringProperty(
+        name="AO Map PNG", default="",
+        description="Write an '#aomap <file>' line (grayscale ambient occlusion). "
+                    "Meshes with a third UV layer (one named 'AO' preferred) write "
+                    "6-component vt lines (u v u2 v2 u3 v3); the AO UV is pair 3")
     color_scale: EnumProperty(
         name="Color Range",
         items=[('UNIT', "0..1 floats", "MeshLab / Blender convention (recommended)"),
@@ -187,6 +192,8 @@ def _write_obj2(op, context):
                                 % (dv.x, dv.y, dv.z, c[0], c[1], c[2], d.energy))
         if op.lightmap:
             f.write("#lightmap %s\n" % op.lightmap)
+        if op.aomap:
+            f.write("#aomap %s\n" % op.aomap)
 
         v_off = vt_off = vn_off = 0
         for obj in mesh_objs:
@@ -228,31 +235,40 @@ def _write_obj2(op, context):
                         f.write("v %.6f %.6f %.6f\n" % (co.x, co.y, co.z))
 
                 # --- UVs (per loop, deduplicated) ---
-                # Layer 0 = base texture UV. A second layer (one named
-                # 'Lightmap' preferred) rides the SAME vt line as two extra
-                # columns: vt u v u2 v2 — still valid OBJ, and the face
-                # indices stay v/vt/vn. Dedup keys include both pairs so
-                # corners differing only in lightmap UV don't merge.
+                # Layer 0 = base texture UV. Extra layers ride the SAME vt line
+                # as extra columns — vt u v [u2 v2 [u3 v3]] — still valid OBJ,
+                # and the face indices stay v/vt/vn. Pair 2 = lightmap (layer
+                # named 'Lightmap' preferred), pair 3 = AO (layer named 'AO'
+                # preferred; zeros fill pair 2 if AO exists without a lightmap).
+                # Dedup keys include every pair so corners differing only in a
+                # secondary UV don't merge.
                 uvls = me.uv_layers
                 uv_layer = uvls[0].data if (op.write_uvs and len(uvls) > 0) else None
                 lm_layer = None
+                ao_layer = None
                 if op.write_uvs and len(uvls) > 1:
-                    lm_layer = uvls.get('Lightmap') or uvls[1]
-                    if lm_layer == uvls[0]:
-                        lm_layer = uvls[1]
+                    ao_layer = uvls.get('AO')
+                    lm_layer = uvls.get('Lightmap')
+                    others = [l for l in uvls[1:] if l not in (ao_layer, lm_layer)]
+                    if lm_layer is None and others:
+                        lm_layer = others.pop(0)
+                    if ao_layer is None and others:
+                        ao_layer = others.pop(0)
                 lm_uv = lm_layer.data if lm_layer else None
+                ao_uv = ao_layer.data if ao_layer else None
                 loop_uv = [0] * len(me.loops)
                 uv_list = []
                 if uv_layer:
                     uv_index = {}
                     for li in range(len(me.loops)):
                         uv = uv_layer[li].uv
-                        if lm_uv:
-                            uv2 = lm_uv[li].uv
-                            key = (round(uv.x, 6), round(uv.y, 6),
-                                   round(uv2.x, 6), round(uv2.y, 6))
-                        else:
-                            key = (round(uv.x, 6), round(uv.y, 6))
+                        key = (round(uv.x, 6), round(uv.y, 6))
+                        if lm_uv or ao_uv:
+                            uv2 = lm_uv[li].uv if lm_uv else None
+                            key += (round(uv2.x, 6), round(uv2.y, 6)) if uv2 else (0.0, 0.0)
+                        if ao_uv:
+                            uv3 = ao_uv[li].uv
+                            key += (round(uv3.x, 6), round(uv3.y, 6))
                         idx = uv_index.get(key)
                         if idx is None:
                             idx = len(uv_list)
@@ -260,10 +276,7 @@ def _write_obj2(op, context):
                             uv_list.append(key)
                         loop_uv[li] = idx
                     for k in uv_list:
-                        if len(k) == 4:
-                            f.write("vt %.6f %.6f %.6f %.6f\n" % k)
-                        else:
-                            f.write("vt %.6f %.6f\n" % k)
+                        f.write("vt " + " ".join("%.6f" % c for c in k) + "\n")
 
                 # --- Normals (per loop, deduplicated) ---
                 loop_nrm = [0] * len(me.loops)
