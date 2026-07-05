@@ -1,9 +1,8 @@
 # OBJ 2.0
 
-A Blender add-on that exports Wavefront `.obj` with the things standard OBJ
-throws away: **vertex colors**, **Blender lights**, and a second **UV layer**
-for lightmaps. Everything stays valid OBJ — importers that don't know the
-extensions still read the geometry.
+A Blender add-on that exports Wavefront `.obj` extended with **vertex colors**,
+**Blender lights**, and a second **UV layer** for lightmaps. The output is
+still valid OBJ — other importers just see normal geometry.
 
 ## Install
 
