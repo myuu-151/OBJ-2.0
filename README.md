@@ -55,6 +55,7 @@ Faces still index plain `v/vt/vn` — two-float readers get the base UVs.
 | Include UVs / Normals / Lights | on |
 | Lightmap PNG | (blank = no `#lightmap` line) |
 | AO Map PNG | (blank = no `#aomap` line) |
+| Write .mtl | on — `map_Kd` = each material's Base Color image |
 | Color Range | 0..1 floats |
 | Forward / Up | −Z / Y |
 

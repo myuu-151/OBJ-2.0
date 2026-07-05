@@ -31,17 +31,52 @@
 bl_info = {
     "name": "OBJ 2.0 — Wavefront export with vertex colors",
     "author": "myuu-151",
-    "version": (1, 3, 0),
+    "version": (1, 4, 0),
     "blender": (4, 0, 0),
     "location": "File > Export > OBJ 2.0 (.obj)",
-    "description": "Export Wavefront .obj with per-vertex colors, the scene light rig (#light/#sun/#ambient), lightmap UVs (#lightmap + vt u v u2 v2), and AO-map UVs (#aomap + a third vt pair).",
+    "description": "Export Wavefront .obj with per-vertex colors, the scene light rig (#light/#sun/#ambient), lightmap UVs (#lightmap + vt u v u2 v2), AO-map UVs (#aomap + a third vt pair), and a .mtl with each material's Base Color image.",
     "category": "Import-Export",
 }
 
+import os
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy_extras.io_utils import ExportHelper, axis_conversion
 from mathutils import Vector
+
+
+def _san(name):
+    """OBJ tokens stop at whitespace — sanitize material names."""
+    return name.replace(" ", "_")
+
+
+def _mat_image(mat):
+    """Absolute filepath of the material's BASE COLOR image. Prefers the image
+    node actually linked to Principled Base Color, so stray bake-target image
+    nodes (lightmap/AO bakes) don't hijack the .mtl entry."""
+    if not mat or not mat.node_tree:
+        return None
+    img = None
+    for n in mat.node_tree.nodes:
+        if n.type == 'BSDF_PRINCIPLED':
+            inp = n.inputs.get('Base Color')
+            if inp and inp.links:
+                src = inp.links[0].from_node
+                if src.type == 'TEX_IMAGE' and src.image:
+                    img = src.image
+                    break
+    if img is None:
+        for n in mat.node_tree.nodes:
+            if n.type == 'TEX_IMAGE' and n.image:
+                img = n.image
+                break
+    if img is None:
+        return None
+    try:
+        p = bpy.path.abspath(img.filepath)
+    except Exception:
+        p = img.filepath
+    return p or None
 
 
 def _loop_normal_getter(me):
@@ -136,6 +171,10 @@ class ExportOBJ2(bpy.types.Operator, ExportHelper):
         description="Write an '#aomap <file>' line (grayscale ambient occlusion). "
                     "Meshes with a third UV layer (one named 'AO' preferred) write "
                     "6-component vt lines (u v u2 v2 u3 v3); the AO UV is pair 3")
+    write_mtl: BoolProperty(
+        name="Write .mtl", default=True,
+        description="Write mtllib/usemtl plus a .mtl file whose map_Kd points at each "
+                    "material's Base Color image — importers can then auto-assign textures")
     color_scale: EnumProperty(
         name="Color Range",
         items=[('UNIT', "0..1 floats", "MeshLab / Blender convention (recommended)"),
@@ -194,7 +233,10 @@ def _write_obj2(op, context):
             f.write("#lightmap %s\n" % op.lightmap)
         if op.aomap:
             f.write("#aomap %s\n" % op.aomap)
+        if op.write_mtl:
+            f.write("mtllib %s\n" % os.path.basename(os.path.splitext(op.filepath)[0] + ".mtl"))
 
+        used_mats = {}   # sanitized material name -> Base Color image path (or None)
         v_off = vt_off = vn_off = 0
         for obj in mesh_objs:
             eval_obj = obj.evaluated_get(depsgraph) if op.apply_modifiers else obj
@@ -295,8 +337,8 @@ def _write_obj2(op, context):
                     for nx, ny, nz in nrm_list:
                         f.write("vn %.6f %.6f %.6f\n" % (nx, ny, nz))
 
-                # --- Faces ---
-                for poly in me.polygons:
+                # --- Faces (grouped per material for usemtl when .mtl is on) ---
+                def emit_face(poly):
                     f.write("f")
                     for li in range(poly.loop_start, poly.loop_start + poly.loop_total):
                         vi = me.loops[li].vertex_index + 1 + v_off
@@ -310,11 +352,38 @@ def _write_obj2(op, context):
                             f.write(" %d" % vi)
                     f.write("\n")
 
+                if op.write_mtl and len(me.materials):
+                    groups = {}
+                    for poly in me.polygons:
+                        groups.setdefault(poly.material_index, []).append(poly)
+                    for mi in sorted(groups):
+                        mat = me.materials[mi] if mi < len(me.materials) else None
+                        name = _san(mat.name) if mat else "none"
+                        if mat and name not in used_mats:
+                            used_mats[name] = _mat_image(mat)
+                        f.write("usemtl %s\n" % name)
+                        for poly in groups[mi]:
+                            emit_face(poly)
+                else:
+                    for poly in me.polygons:
+                        emit_face(poly)
+
                 v_off += len(me.vertices)
                 vt_off += len(uv_list)
                 vn_off += len(nrm_list)
             finally:
                 eval_obj.to_mesh_clear()
+
+    # --- .mtl companion: each material's Base Color image as map_Kd (absolute
+    # path so same-machine importers resolve it without copying files). ---
+    if op.write_mtl and used_mats:
+        mtl_path = os.path.splitext(op.filepath)[0] + ".mtl"
+        with open(mtl_path, 'w', encoding='utf-8') as mf:
+            mf.write("# OBJ 2.0 materials\n")
+            for name, imgp in used_mats.items():
+                mf.write("newmtl %s\n" % name)
+                if imgp:
+                    mf.write("map_Kd %s\n" % imgp)
 
     op.report({'INFO'}, "Exported OBJ 2.0: %s" % op.filepath)
     return {'FINISHED'}
