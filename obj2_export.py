@@ -31,7 +31,7 @@
 bl_info = {
     "name": "OBJ 2.0 — Wavefront export with vertex colors",
     "author": "myuu-151",
-    "version": (1, 4, 0),
+    "version": (1, 5, 0),
     "blender": (4, 0, 0),
     "location": "File > Export > OBJ 2.0 (.obj)",
     "description": "Export Wavefront .obj with per-vertex colors, the scene light rig (#light/#sun/#ambient), lightmap UVs (#lightmap + vt u v u2 v2), AO-map UVs (#aomap + a third vt pair), and a .mtl with each material's Base Color image.",
@@ -258,6 +258,15 @@ def _write_obj2(op, context):
                 get_nrm = _loop_normal_getter(me) if op.write_normals else None
 
                 f.write("o %s\n" % obj.name)
+                # Per-object lightmap/AO (custom properties "lightmap"/"aomap"
+                # on the object): each declaration starts a new MAP GROUP —
+                # one OBJ can carry several lightmap/AO pairs, applied to the
+                # faces that follow. Header-level #lightmap/#aomap (the export
+                # options) remain the single-map form.
+                if obj.get("lightmap"):
+                    f.write("#lightmap %s\n" % obj["lightmap"])
+                if obj.get("aomap"):
+                    f.write("#aomap %s\n" % obj["aomap"])
 
                 # --- Vertices (+ color) ---
                 for v in me.vertices:
